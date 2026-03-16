@@ -1,0 +1,283 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "windows"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users ──────────────────────────────────────────────
+
+model User {
+  id         String   @id @default(cuid())
+  email      String   @unique
+  name       String
+  password   String
+  role       UserRole @default(HIRING_MANAGER)
+  department String?
+  avatarUrl  String?
+  createdAt  DateTime @default(now())
+
+  requisitions    Requisition[]
+  approvalSteps   ApprovalStep[]
+  jobDescriptions JobDescription[]
+  jdVersions      JdVersion[]
+  comments        JdComment[]
+  notifications   Notification[]
+}
+
+enum UserRole {
+  ADMIN
+  HIRING_MANAGER
+  DEPARTMENT_HEAD
+  FINANCE
+  HR
+  RECRUITER
+}
+
+// ─── Requisitions ───────────────────────────────────────
+
+model Requisition {
+  id                 String       @id @default(cuid())
+  title              String
+  department         String
+  team               String?
+  level              JobLevel
+  type               ReqType
+  justification      String       @db.Text
+  hiringManagerNotes String?      @db.Text
+  headcount          Int          @default(1)
+  location           String
+  remotePolicy       RemotePolicy
+  salaryMin          Int?
+  salaryMax          Int?
+  salaryCurrency     String       @default("USD")
+  targetStartDate    DateTime?
+  status             ReqStatus    @default(DRAFT)
+  revisionCount      Int          @default(0)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  createdBy   User   @relation(fields: [createdById], references: [id])
+  createdById String
+
+  workflows      WorkflowInstance[]
+  jobDescription JobDescription?
+
+  @@index([status])
+  @@index([createdById])
+}
+
+enum JobLevel {
+  JUNIOR
+  MID
+  SENIOR
+  LEAD
+  MANAGER
+  DIRECTOR
+  VP
+}
+
+enum ReqType {
+  NEW_ROLE
+  BACKFILL
+  CONTRACTOR
+  CONVERSION
+}
+
+enum RemotePolicy {
+  REMOTE
+  HYBRID
+  ONSITE
+}
+
+enum ReqStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  JD_IN_PROGRESS
+  JD_REVIEW
+  READY_TO_POST
+  POSTED
+  CLOSED
+  CANCELLED
+}
+
+// ─── Approval Workflow ──────────────────────────────────
+
+model WorkflowInstance {
+  id          String         @id @default(cuid())
+  currentStep Int            @default(0)
+  status      WorkflowStatus @default(ACTIVE)
+  isLatest    Boolean        @default(true)
+  revision    Int            @default(1)
+  startedAt   DateTime       @default(now())
+  completedAt DateTime?
+
+  requisition   Requisition @relation(fields: [requisitionId], references: [id])
+  requisitionId String
+
+  steps ApprovalStep[]
+
+  @@index([requisitionId, isLatest])
+}
+
+enum WorkflowStatus {
+  ACTIVE
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+model ApprovalStep {
+  id           String     @id @default(cuid())
+  stepOrder    Int
+  stepLabel    String
+  approverRole String     @default("HR")
+  status       StepStatus @default(PENDING)
+  comment      String?    @db.Text
+  deadlineAt   DateTime
+  decidedAt    DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  workflow   WorkflowInstance @relation(fields: [workflowId], references: [id])
+  workflowId String
+
+  assignee   User   @relation(fields: [assigneeId], references: [id])
+  assigneeId String
+
+  @@index([workflowId, stepOrder])
+  @@index([assigneeId, status])
+  @@index([approverRole, status])
+}
+
+enum StepStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SKIPPED
+}
+
+// ─── Job Descriptions ───────────────────────────────────
+
+model JobDescription {
+  id               String   @id @default(cuid())
+  version          Int      @default(1)
+  content          Json
+  rawText          String   @db.Text
+  aiGenerated      Boolean  @default(false)
+  complianceScore  Float?
+  inclusionScore   Float?
+  readabilityScore Float?
+  status           JdStatus @default(DRAFT)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  requisition   Requisition @relation(fields: [requisitionId], references: [id])
+  requisitionId String      @unique
+
+  createdBy   User   @relation(fields: [createdById], references: [id])
+  createdById String
+
+  comments JdComment[]
+  versions JdVersion[]
+}
+
+enum JdStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  POSTED
+}
+
+model JdVersion {
+  id      String   @id @default(cuid())
+  version Int
+  rawText String   @db.Text
+  content Json
+  savedAt DateTime @default(now())
+
+  jobDescription   JobDescription @relation(fields: [jobDescriptionId], references: [id])
+  jobDescriptionId String
+
+  savedBy   User   @relation(fields: [savedById], references: [id])
+  savedById String
+
+  @@index([jobDescriptionId, version])
+}
+
+model JdComment {
+  id         String   @id @default(cuid())
+  section    String
+  anchorText String?
+  content    String   @db.Text
+  resolved   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  jobDescription JobDescription @relation(fields: [jdId], references: [id])
+  jdId           String
+
+  author   User   @relation(fields: [authorId], references: [id])
+  authorId String
+}
+
+// ─── Templates ──────────────────────────────────────────
+
+model JdTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  department  String?
+  roleFamily  String?
+  content     Json
+  usageCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ─── Approval Chains (configurable per department) ──────
+
+model ApprovalChain {
+  id         String              @id @default(cuid())
+  name       String
+  department String?
+  isDefault  Boolean             @default(false)
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+  steps      ApprovalChainStep[]
+
+  @@index([isDefault])
+  @@index([department])
+}
+
+model ApprovalChainStep {
+  id           String        @id @default(cuid())
+  stepOrder    Int
+  stepLabel    String
+  approverRole String
+  deadlineDays Int           @default(2)
+  chainId      String
+  chain        ApprovalChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+
+  @@index([chainId, stepOrder])
+}
+
+// ─── Notifications ──────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(cuid())
+  type      String
+  title     String
+  body      String
+  actionUrl String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id])
+  userId String
+
+  @@index([userId, read])
+}
